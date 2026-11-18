@@ -1,0 +1,13 @@
+{
+  "referencia": "2026-11-18T13:16:00Z",
+  "eventos": [
+    {
+      "registroId": 1,
+      "pedidoId": "1050",
+      "sistema": "vendas",
+      "ocorridoEm": "2026-11-18T10:00:00-03:00",
+      "quantidadeTotal": 2,
+      "valorTotal": 59.9
+    }
+  ]
+}

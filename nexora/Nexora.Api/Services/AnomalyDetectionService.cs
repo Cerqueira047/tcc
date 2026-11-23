@@ -49,7 +49,8 @@ public sealed class AnomalyDetectionService(NexoraDbContext db, IConfiguration c
             alert.Message = message;
             alert.FinancialDifference = financialDifference;
             alert.Severity = severity;
-            alert.History.Add(new AlertHistory {
+            db.AlertHistories.Add(new AlertHistory {
+                AlertId = alert.Id,
                 Action = "Atualizado", Description = "A análise foi atualizada: " + message
             });
             await db.SaveChangesAsync(ct);

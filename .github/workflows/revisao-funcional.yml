@@ -36,7 +36,7 @@ jobs:
           server=$!
           npm run dev --prefix nexora/Nexora.Web -- --host 127.0.0.1 --port 5173 > "$RUNNER_TEMP/web.log" 2>&1 &
           web=$!
-          trap 'kill "$server" "$web" 2>/dev/null || true' EXIT
+          trap 'kill "$server" "$web" 2>/dev/null || true; grep -Ei "exception:|cannot write|failed executing" "$RUNNER_TEMP/api.log" | tail -15 || true' EXIT
           curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:5241/api/status
           curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:5173 >/dev/null
           "$RUNNER_TEMP/revisao/bin/python" testes/revisao_funcional.py

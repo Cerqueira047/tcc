@@ -44,7 +44,7 @@ def equal(actual, expected):
     assert actual == expected, f"obtido {actual!r}, esperado {expected!r}"
 
 def stamp(seconds):
-    return (NOW + timedelta(seconds=seconds)).isoformat()
+    return (NOW + timedelta(seconds=seconds)).isoformat().replace('+00:00','Z')
 
 def event(key, source, amount, quantity, ts=-60, kind="PedidoAtualizado", suffix=""):
     return {"recordId":key, "systemName":source, "eventId":key+source+suffix, "eventType":kind,
@@ -219,6 +219,12 @@ check("Respostas esperadas para dados inválidos e IDs ausentes",errors)
 check("Dashboard real no Chrome, atualização e resolução",screen)
 check("Dashboard final / SQL",summary)
 check("HTTP 500 nas rotas funcionais exercitadas",lambda:equal([r for r in responses if r[2]>=500],[]))
+def utc_offset():
+    item=event("OFFSET-ISO","SistemaVendas",10,1)
+    item["occurredAt"]=item["occurredAt"].replace("Z","+00:00")
+    post(item)
+    equal(sql("""SELECT count(*) FROM "Events" WHERE "RecordId"='OFFSET-ISO'"""),"1")
+check("Evento válido com UTC escrito como +00:00",utc_offset)
 check("Status com PostgreSQL indisponível",offline)
 with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
     f.write("## Revisão do NEXORA\n\n| Resultado | Verificação | Evidência |\n|---|---|---|\n")

@@ -6,6 +6,7 @@
     <UserSecretsId>6ad0fd45-9784-4282-a010-09e3412df3dc</UserSecretsId>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../integrante-3/Nexora.Analise/Nexora.Analise.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.14" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

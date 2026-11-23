@@ -1,4 +1,4 @@
-using System.Text.Json;
+using Nexora.Analise;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Nexora.Api.Data;
@@ -6,7 +6,7 @@ using Nexora.Api.Models;
 
 namespace Nexora.Api.Services;
 
-public sealed class AnomalyDetectionService(NexoraDbContext db, IConfiguration configuration)
+public sealed class AnomalyDetectionService(NexoraDbContext db, IConfiguration configuration, IAnalisadorPedidos orders)
 {
     public async Task<List<object>> AnalyzeRecordAsync(string recordId, string eventType, CancellationToken ct = default)
     {
@@ -14,35 +14,12 @@ public sealed class AnomalyDetectionService(NexoraDbContext db, IConfiguration c
             .Where(e => e.RecordId == recordId && e.EventType == eventType)
             .OrderByDescending(e => e.OccurredAt).ToListAsync(ct);
 
-        var latest = events.GroupBy(e => e.SystemName).Select(g => g.First()).ToList();
-        var expected = configuration.GetSection("Monitoring:ExpectedSystems").Get<string[]>() ?? [];
-        var observed = latest.Select(e => e.SystemName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var missingSystems = expected.Where(s => !observed.Contains(s)).ToArray();
+        var result = Analyze(events, eventType, recordId);
+        if (result is null) return [];
 
-        var issues = new List<string>();
-        var details = new List<object>();
-        var amountValues = ReadMetric(latest, ["amount", "valorTotal", "totalAmount"]);
-        var quantityValues = ReadMetric(latest, ["quantity", "quantidade", "totalQuantity"]);
-
-        var financialDifference = CompareMetric("valor financeiro", amountValues, issues, details);
-        CompareMetric("quantidade", quantityValues, issues, details);
-
-        if (missingSystems.Length > 0)
-            issues.Add("Aguardando evento dos sistemas: " + string.Join(", ", missingSystems));
-
-        if (issues.Count == 0)
-            return [];
-
-        var severity = financialDifference >= 500m ? "Alta"
-            : financialDifference >= 100m || missingSystems.Length > 0 ? "Média" : "Baixa";
-        var message = string.Join(" ", issues);
-        var result = new
-        {
-            registro = recordId, tipoEvento = eventType, gravidade = severity,
-            inconsistencias = issues, valoresComparados = details,
-            sistemasEsperadosAusentes = missingSystems,
-            diferencaFinanceira = financialDifference
-        };
+        var financialDifference = result.DiferencaFinanceira;
+        var severity = result.Gravidade;
+        var message = string.Join(" ", result.Inconsistencias);
 
         var alert = await db.Alerts.FirstOrDefaultAsync(a =>
             a.RecordId == recordId && a.EventType == eventType && !a.Resolved, ct);
@@ -96,23 +73,41 @@ public sealed class AnomalyDetectionService(NexoraDbContext db, IConfiguration c
         var events = await db.Events.AsNoTracking()
             .Where(e => e.RecordId == recordId && e.EventType == eventType)
             .OrderByDescending(e => e.OccurredAt).ToListAsync(ct);
+        var result = Analyze(events, eventType, recordId);
+        return result is null ? [] : [result];
+    }
+
+    private sealed record AnalysisResult(string Registro, string TipoEvento, string Gravidade,
+        List<string> Inconsistencias, List<object> ValoresComparados, string[] SistemasEsperadosAusentes,
+        decimal DiferencaFinanceira, IReadOnlyList<OrderFinding> OcorrenciasPedidos);
+
+    private AnalysisResult? Analyze(List<Event> events, string eventType, string recordId)
+    {
         var latest = events.GroupBy(e => e.SystemName).Select(g => g.First()).ToList();
         var expected = configuration.GetSection("Monitoring:ExpectedSystems").Get<string[]>() ?? [];
         var observed = latest.Select(e => e.SystemName).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var missing = expected.Where(s => !observed.Contains(s)).ToArray();
         var issues = new List<string>();
         var details = new List<object>();
-        var financialDifference = CompareMetric("valor financeiro", ReadMetric(latest, ["amount", "valorTotal", "totalAmount"]), issues, details);
-        CompareMetric("quantidade", ReadMetric(latest, ["quantity", "quantidade", "totalQuantity"]), issues, details);
+        var financialDifference = CompareMetric("valor financeiro", ReadMetric(latest, OrderAnalysis.AmountNames), issues, details);
+        var quantityDifference = CompareMetric("quantidade", ReadMetric(latest, OrderAnalysis.QuantityNames), issues, details);
         if (missing.Length > 0) issues.Add("Aguardando evento dos sistemas: " + string.Join(", ", missing));
-        if (issues.Count == 0) return [];
+
+        var findings = OrderAnalysis.Analyze(orders, events, eventType, DateTimeOffset.UtcNow);
+        foreach (var finding in findings)
+        {
+            // A regra do pedido também traz as evidências da divergência já resumida acima.
+            if (finding.Tipo == "DIVERGENCIA" &&
+                (finding.Campo == "valorTotal" && financialDifference > 0 ||
+                 finding.Campo == "quantidadeTotal" && quantityDifference > 0))
+                continue;
+            issues.Add(finding.Mensagem);
+        }
+
+        if (issues.Count == 0) return null;
         var severity = financialDifference >= 500m ? "Alta"
             : financialDifference >= 100m || missing.Length > 0 ? "Média" : "Baixa";
-        return [new {
-            registro = recordId, tipoEvento = eventType, gravidade = severity,
-            inconsistencias = issues, valoresComparados = details,
-            sistemasEsperadosAusentes = missing, diferencaFinanceira = financialDifference
-        }];
+        return new(recordId, eventType, severity, issues, details, missing, financialDifference, findings);
     }
 
     private static List<(string System, decimal Value)> ReadMetric(
@@ -120,7 +115,7 @@ public sealed class AnomalyDetectionService(NexoraDbContext db, IConfiguration c
     {
         var values = new List<(string, decimal)>();
         foreach (var item in events)
-            if (TryGetNumber(item.Data, acceptedNames, out var value))
+            if (OrderAnalysis.TryGetNumber(item.Data, acceptedNames, out var value))
                 values.Add((item.SystemName, value));
         return values;
     }
@@ -132,21 +127,6 @@ public sealed class AnomalyDetectionService(NexoraDbContext db, IConfiguration c
         var difference = values.Max(x => x.Value) - values.Min(x => x.Value);
         details.Add(new { indicador = label, valores = values.Select(x => new { sistema = x.System, valor = x.Value }) });
         if (difference > 0m) issues.Add($"Divergência de {label}: diferença de {difference}.");
-        return label == "valor financeiro" ? difference : 0m;
-    }
-
-    private static bool TryGetNumber(string json, string[] acceptedNames, out decimal value)
-    {
-        value = 0m;
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return false;
-            foreach (var property in doc.RootElement.EnumerateObject())
-                if (acceptedNames.Contains(property.Name, StringComparer.OrdinalIgnoreCase))
-                    return property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetDecimal(out value);
-        }
-        catch (JsonException) { }
-        return false;
+        return difference;
     }
 }

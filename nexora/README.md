@@ -75,11 +75,9 @@ Abra `Nexora.Api.http` no Rider e execute as requisições em sequência. Envie 
 | GET | `/api/systems/performance` | Desempenho por sistema |
 | GET | `/api/systems/health` | Resumo da saúde dos sistemas |
 
-## Limites atuais / próxima integração
+## Análise de pedidos integrada
 
-A análise implementada é independente de qualquer integrante: compara o evento mais recente por sistema para o mesmo `recordId` e `eventType`, verificando divergências financeiras e de quantidade. Também pode sinalizar sistemas esperados ausentes quando a lista `Monitoring:ExpectedSystems` estiver configurada. A API rejeita IDs de evento duplicados e datas inválidas/futuras. A detecção de sistema ausente só é confiável quando a organização configurar quais sistemas devem enviar cada tipo de evento; na configuração padrão a lista está vazia para evitar falsos positivos. Regras de negócio específicas de pedidos/estoque podem ser ampliadas depois sem depender do módulo externo.
-
-A compilação e os testes de integração devem ser executados no computador de desenvolvimento. O ambiente em que esta revisão foi preparada não possui .NET SDK nem acesso ao PostgreSQL local do usuário.
+A API utiliza a biblioteca do integrante 3 para eventos de tipo `PedidoAtualizado` vindos de vendas e estoque. A análise roda após a gravação e na consulta de anomalias, usando o histórico do pedido e devolvendo os GUIDs dos eventos em `ocorrenciasPedidos`. Os demais sistemas continuam sujeitos às comparações gerais da API. Consulte o [guia do TCC](../README.md).
 
 ## Frontend web
 

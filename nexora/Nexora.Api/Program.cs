@@ -1,3 +1,4 @@
+using Nexora.Analise;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Nexora.Api.Data;
@@ -16,6 +17,8 @@ builder.Services.AddDbContext<NexoraDbContext>(options =>
     options.UseNpgsql(connectionString));
 builder.Services.AddScoped<AlertPriorityService>();
 builder.Services.AddScoped<DashboardService>();
+builder.Services.AddSingleton<IAnalisadorPedidos>(new AnalisadorPedidos(TimeSpan.FromMinutes(
+    builder.Configuration.GetValue("Monitoring:OrderTimeoutMinutes", 15))));
 builder.Services.AddScoped<AnomalyDetectionService>();
 builder.Services.AddScoped<AlertRecurrenceService>();
 builder.Services.AddScoped<SystemPerformanceService>();

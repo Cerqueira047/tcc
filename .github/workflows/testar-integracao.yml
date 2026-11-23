@@ -1,0 +1,46 @@
+name: Testar integração de pedidos
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  integrar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Testar regras e compilar API
+        run: |
+          dotnet run --project integrante-3/Testes
+          dotnet build nexora/Nexora.Api
+      - name: Verificar venda e estoque com PostgreSQL
+        shell: bash
+        run: |
+          sudo systemctl start postgresql
+          sudo -u postgres createuser "$(whoami)"
+          sudo -u postgres createdb -O "$(whoami)" nexora_teste
+          export ConnectionStrings__DefaultConnection="Host=/var/run/postgresql;Database=nexora_teste;Username=$(whoami)"
+          dotnet run --no-build --no-launch-profile --project nexora/Nexora.Api --urls http://127.0.0.1:5241 > "$RUNNER_TEMP/api.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true; cat "$RUNNER_TEMP/api.log"' EXIT
+          api=http://127.0.0.1:5241/api
+          curl --retry 30 --retry-connrefused --retry-delay 1 -fsS "$api/status"
+          # A diferença de horário é a única inconsistência dos dois eventos.
+          for origem in Vendas Estoque; do
+            minutos=20
+            if [[ "$origem" == Estoque ]]; then minutos=1; fi
+            horario=$(date -u -d "$minutos minutes ago" +%FT%TZ)
+            evento=$(jq -n --arg nome "Sistema$origem" --arg data "$horario" '{
+              systemName: $nome, eventId: $nome, recordId: "1050", eventType: "PedidoAtualizado",
+              occurredAt: $data, data: {quantity: 2, amount: 59.90}
+            }')
+            resposta=$(curl -fsS --json "$evento" "$api/events/")
+          done
+          jq -e '[.inconsistenciasDetectadas[].ocorrenciasPedidos[].tipo] == ["ATRASO"]' <<< "$resposta"
+          curl -fsS "$api/events/anomalies" | jq -e '.[0].ocorrenciasPedidos[0] | .tipo == "ATRASO" and (.registros | length) == 2'
+          curl -fsS "$api/alerts" | jq -e '.data | any(.recordId == "1050" and (.message | contains("depois do prazo")))'

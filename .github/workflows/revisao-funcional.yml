@@ -1,0 +1,47 @@
+name: Revisão funcional do NEXORA
+on: [push]
+permissions:
+  contents: read
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Preparar API, interface e navegador
+        run: |
+          dotnet run --project integrante-3/Testes
+          dotnet build nexora/Nexora.Api
+          npm ci --prefix nexora/Nexora.Web
+          python -m venv "$RUNNER_TEMP/revisao"
+          "$RUNNER_TEMP/revisao/bin/pip" install --quiet selenium
+      - name: Compilar interface para produção
+        id: buildweb
+        continue-on-error: true
+        run: npm run build --prefix nexora/Nexora.Web
+      - name: Exercitar endpoints, PostgreSQL e interface em navegador
+        env:
+          VITE_API_URL: http://127.0.0.1:5241
+        run: |
+          sudo systemctl start postgresql
+          sudo -u postgres createuser "$(whoami)"
+          sudo -u postgres createdb -O "$(whoami)" nexora_revisao
+          export ConnectionStrings__DefaultConnection="Host=/var/run/postgresql;Database=nexora_revisao;Username=$(whoami);Timeout=2"
+          dotnet run --no-build --no-launch-profile --project nexora/Nexora.Api --urls http://127.0.0.1:5241 > "$RUNNER_TEMP/api.log" 2>&1 &
+          server=$!
+          npm run dev --prefix nexora/Nexora.Web -- --host 127.0.0.1 --port 5173 > "$RUNNER_TEMP/web.log" 2>&1 &
+          web=$!
+          trap 'kill "$server" "$web" 2>/dev/null || true' EXIT
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:5241/api/status
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:5173 >/dev/null
+          "$RUNNER_TEMP/revisao/bin/python" testes/revisao_funcional.py
+      - name: Resultado do build da interface
+        if: always()
+        run: |
+          echo 'Build de produção da interface — ${{ steps.buildweb.outcome }}' >> "$GITHUB_STEP_SUMMARY"
+          test '${{ steps.buildweb.outcome }}' = success
